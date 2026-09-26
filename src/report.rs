@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use crate::bench::{BenchReport, RequestResult};
+use crate::bench::BenchReport;
 
 /// A summary of a finished benchmark, serialized to JSON when requested.
 #[derive(Serialize)]
@@ -57,13 +57,14 @@ fn percentiles(values: &[f64]) -> Percentiles {
 
 
 pub fn build_report(report: &BenchReport) -> Report {
-    let success: Vec<&RequestResult> = report.results.iter().filter(|r| r.ok).collect();
     let errors: Vec<String> = report
         .results
         .iter()
         .filter(|r| !r.ok)
         .map(|r| format!("[{}] {}", r.index, r.error.as_deref().unwrap_or("unknown")))
         .collect();
+    let success_count = report.results.iter().filter(|r| r.ok).count() as u64;
+    let failure_count = report.results.iter().filter(|r| !r.ok).count() as u64;
 
     let wall_secs = report.wall_time.as_secs_f64().max(f64::EPSILON);
     Report {
@@ -72,8 +73,8 @@ pub fn build_report(report: &BenchReport) -> Report {
         concurrency: report.config.concurrency,
         total_requests: report.config.total_requests,
         warmup: report.config.warmup,
-        success_count: success.len() as u64,
-        failure_count: report.failure_count() as u64,
+        success_count,
+        failure_count,
         wall_seconds: wall_secs,
         total_prompt_tokens: report.total_prompt_tokens(),
         total_completion_tokens: report.total_completion_tokens(),
