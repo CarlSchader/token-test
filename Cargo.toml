@@ -1,0 +1,29 @@
+[package]
+name = "token-test"
+version = "0.1.0"
+edition = "2021"
+description = "Load-test OpenAI-compatible LLM servers: measure tokens/s and throughput under concurrent load"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+bytes = "1"
+clap = { version = "4", features = ["derive", "env"] }
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time", "net", "test-util"] }
+
+[[bin]]
+name = "token-test"
+path = "src/main.rs"
+
+[[bin]]
+name = "token-test-mock"
+path = "src/bin/mock.rs"
