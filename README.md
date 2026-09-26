@@ -4,21 +4,34 @@ A Rust CLI for load-testing OpenAI-compatible LLM servers. Measures tokens/secon
 
 ## Build
 
+With Nix (recommended, reproducible):
+
+```sh
+nix build                      # builds token-test and token-test-mock
+nix run . -- --help            # run without installing
+nix develop                    # dev shell with rustc + cargo
+```
+
+With cargo:
+
 ```sh
 cargo build --release
 ```
 
 ## Usage
 
+`nix run .` runs the main CLI directly; `./result/bin/token-test` and `./target/release/token-test` are the built binaries. In the examples below, `./token-test` is the binary from any of the builds.
+
 ```sh
 # Basic: 4 concurrent requests, 20 total, streaming
-./target/release/token-test http://localhost:8000/v1 -m gpt-4o-mini -c 4 -n 20
+nix run . -- http://localhost:8000/v1 -m gpt-4o-mini -c 4 -n 20
+./token-test http://localhost:8000/v1 -m gpt-4o-mini -c 4 -n 20
 
 # Non-streaming mode
-./target/release/token-test http://localhost:8000/v1 -m llama-3 -c 8 -n 50 --no-stream
+./token-test http://localhost:8000/v1 -m llama-3 -c 8 -n 50 --no-stream
 
 # Custom prompt, model, and token limit
-./target/release/token-test http://localhost:8000/v1 \
+./token-test http://localhost:8000/v1 \
   -m "llama-3-70b" \
   --prompt "Write a poem" \
   --system "You are a poet." \
@@ -26,10 +39,10 @@ cargo build --release
   -c 8 -n 30
 
 # JSON output for scripting
-./target/release/token-test http://localhost:8000/v1 -m gpt-4o --json -c 2 -n 10
+./token-test http://localhost:8000/v1 -m gpt-4o --json -c 2 -n 10
 
 # List available models
-./target/release/token-test http://localhost:8000/v1 --list-models
+./token-test http://localhost:8000/v1 --list-models
 ```
 
 ## Options
@@ -65,10 +78,11 @@ cargo build --release
 
 ```sh
 # Start the mock
-cargo run --release --bin token-test-mock -- --tokens 128 --token-ms 20
+nix run .#mock -- --tokens 128 --token-ms 20
+# or: cargo run --release --bin token-test-mock -- --tokens 128 --token-ms 20
 
 # Run the bench against it
-./target/release/token-test http://127.0.0.1:8901/v1 -m mock-model -c 4 -n 10
+nix run . -- http://127.0.0.1:8901/v1 -m mock-model -c 4 -n 10
 ```
 
 The mock simulates a fixed token rate and supports `--fail-every N` to inject 500s.

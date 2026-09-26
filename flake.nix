@@ -29,6 +29,16 @@
           };
         };
 
+        apps.default = {
+          type = "app";
+          program = "${self.packages.${system}.default}/bin/token-test";
+        };
+
+        apps.mock = {
+          type = "app";
+          program = "${self.packages.${system}.default}/bin/token-test-mock";
+        };
+
         devShells.default = pkgs.mkShell {
           packages = [
             pkgs.rustc
