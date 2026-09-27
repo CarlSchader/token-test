@@ -5,6 +5,9 @@ use serde::Serialize;
 use crate::bench::BenchReport;
 
 /// A summary of a finished benchmark, serialized to JSON when requested.
+///
+/// All counts and rates are based on measured (non-warmup) results; the
+/// `warmup` field records how many requests were excluded.
 #[derive(Serialize)]
 pub struct Report {
     pub model: String,
@@ -12,16 +15,38 @@ pub struct Report {
     pub concurrency: usize,
     pub total_requests: u32,
     pub warmup: u32,
+    /// Successful measured (non-warmup) requests.
     pub success_count: u64,
+    /// Failed measured (non-warmup) requests.
     pub failure_count: u64,
     pub wall_seconds: f64,
+    /// Measured window: earliest measured request start to latest measured
+    /// request end. Steady-state rates use this instead of `wall_seconds`.
+    pub steady_window_seconds: f64,
     pub total_prompt_tokens: u64,
     pub total_completion_tokens: u64,
+    pub total_reasoning_tokens: u64,
+    /// prompt + completion + reasoning.
     pub total_tokens: u64,
+    /// Successful measured requests whose token counts are estimates
+    /// (the response carried no authoritative usage).
+    pub estimated_token_requests: u64,
     pub requests_per_second: f64,
+    /// Visible completion tokens / total wall time.
     pub tokens_per_second: f64,
+    /// (visible + reasoning) completion tokens / total wall time.
+    pub tokens_per_second_incl_reasoning: f64,
+    /// Visible completion tokens / measured window (steady state).
+    pub steady_tokens_per_second: f64,
+    /// (visible + reasoning) tokens / measured window (steady state).
+    pub steady_tokens_per_second_incl_reasoning: f64,
+    /// (visible + reasoning) / (stream end − first token of any kind),
+    /// per request, as percentiles.
     pub per_request_tokens_per_second: Percentiles,
+    /// Time to the first content token, in ms.
     pub ttft_ms: Percentiles,
+    /// Time to the first token of any kind (content or reasoning), in ms.
+    pub first_token_ms: Percentiles,
     pub latency_ms: Percentiles,
     pub errors: Vec<String>,
 }
@@ -57,16 +82,26 @@ fn percentiles(values: &[f64]) -> Percentiles {
 
 
 pub fn build_report(report: &BenchReport) -> Report {
+    // Measured (non-warmup) failures only: consistent with every count and
+    // rate in this report, which excludes warm-up requests.
     let errors: Vec<String> = report
         .results
         .iter()
-        .filter(|r| !r.ok)
+        .filter(|r| !r.warmup && !r.ok)
         .map(|r| format!("[{}] {}", r.index, r.error.as_deref().unwrap_or("unknown")))
         .collect();
-    let success_count = report.results.iter().filter(|r| r.ok).count() as u64;
-    let failure_count = report.results.iter().filter(|r| !r.ok).count() as u64;
+    let success_count = report.success_count() as u64;
+    let failure_count = report.failure_count() as u64;
+
+    let total_prompt_tokens = report.total_prompt_tokens();
+    let total_completion_tokens = report.total_completion_tokens();
+    let total_reasoning_tokens = report.total_reasoning_tokens();
 
     let wall_secs = report.wall_time.as_secs_f64().max(f64::EPSILON);
+    let steady_secs = report
+        .measured_window()
+        .map(|w| w.as_secs_f64())
+        .unwrap_or(wall_secs);
     Report {
         model: report.config.model.clone(),
         url: report.config.completions_url(),
@@ -76,13 +111,20 @@ pub fn build_report(report: &BenchReport) -> Report {
         success_count,
         failure_count,
         wall_seconds: wall_secs,
-        total_prompt_tokens: report.total_prompt_tokens(),
-        total_completion_tokens: report.total_completion_tokens(),
-        total_tokens: report.total_prompt_tokens() + report.total_completion_tokens(),
+        steady_window_seconds: steady_secs,
+        total_prompt_tokens,
+        total_completion_tokens,
+        total_reasoning_tokens,
+        total_tokens: total_prompt_tokens + total_completion_tokens + total_reasoning_tokens,
+        estimated_token_requests: report.estimated_count() as u64,
         requests_per_second: report.success_count() as f64 / wall_secs,
-        tokens_per_second: report.total_completion_tokens() as f64 / wall_secs,
+        tokens_per_second: report.aggregate_tokens_per_second(),
+        tokens_per_second_incl_reasoning: report.aggregate_tokens_per_second_incl_reasoning(),
+        steady_tokens_per_second: report.steady_tokens_per_second(),
+        steady_tokens_per_second_incl_reasoning: report.steady_tokens_per_second_incl_reasoning(),
         per_request_tokens_per_second: percentiles(&report.per_request_rates()),
         ttft_ms: percentiles(&report.ttft_values_ms()),
+        first_token_ms: percentiles(&report.first_token_values_ms()),
         latency_ms: percentiles(&report.latency_values_ms()),
         errors,
     }
@@ -97,36 +139,64 @@ pub fn print_report(report: &BenchReport) {
     println!("model         : {}", r.model);
     println!("concurrency   : {}", r.concurrency);
     println!(
-        "requests      : {} total, {} ok, {} failed ({} warmup excluded)",
-        r.total_requests, r.success_count, r.failure_count, r.warmup
+        "requests      : {} ok, {} failed ({} warmup excluded, {} total)",
+        r.success_count, r.failure_count, r.warmup, r.total_requests
     );
-    println!("wall clock    : {:.2} s", r.wall_seconds);
+    println!(
+        "wall clock    : {:.2} s (steady-state window: {:.2} s)",
+        r.wall_seconds, r.steady_window_seconds
+    );
     println!();
     println!("throughput");
-    println!("  total tokens  : {} (prompt {} + completion {})",
-        r.total_tokens, r.total_prompt_tokens, r.total_completion_tokens);
+    println!(
+        "  total tokens  : {} (prompt {} + completion {} + reasoning {})",
+        r.total_tokens, r.total_prompt_tokens, r.total_completion_tokens, r.total_reasoning_tokens
+    );
     println!("  requests/s    : {:.2}", r.requests_per_second);
-    println!("  tokens/s (out): {:.1}", r.tokens_per_second);
+    println!("  tokens/s (out)                    : {:.1}", r.tokens_per_second);
+    println!(
+        "  tokens/s (incl. reasoning)      : {:.1}",
+        r.tokens_per_second_incl_reasoning
+    );
+    println!("  tokens/s (steady, out)            : {:.1}", r.steady_tokens_per_second);
+    println!(
+        "  tokens/s (steady, incl. reasoning): {:.1}",
+        r.steady_tokens_per_second_incl_reasoning
+    );
     println!();
     let p = &r.per_request_tokens_per_second;
     println!(
-        "per-request tok/s: p50 {:>7.1}  p90 {:>7.1}  p99 {:>7.1}  min {:>7.1}  max {:>7.1}",
+        "per-request tok/s (incl. reasoning): p50 {:>7.1}  p90 {:>7.1}  p99 {:>7.1}  min {:>7.1}  max {:>7.1}",
         p.p50, p.p90, p.p99, p.min, p.max
     );
     let t = &r.ttft_ms;
     println!(
-        "TTFT (ms)       : p50 {:>7.0}  p90 {:>7.0}  p99 {:>7.0}  min {:>7.0}  max {:>7.0}",
+        "TTFT (ms, first content token)  : p50 {:>7.0}  p90 {:>7.0}  p99 {:>7.0}  min {:>7.0}  max {:>7.0}",
         t.p50, t.p90, t.p99, t.min, t.max
+    );
+    let f = &r.first_token_ms;
+    println!(
+        "first token (ms, any kind)      : p50 {:>7.0}  p90 {:>7.0}  p99 {:>7.0}  min {:>7.0}  max {:>7.0}",
+        f.p50, f.p90, f.p99, f.min, f.max
     );
     let l = &r.latency_ms;
     println!(
-        "total latency   : p50 {:>7}  p90 {:>7}  p99 {:>7}  min {:>7}  max {:>7}",
+        "total latency                   : p50 {:>7}  p90 {:>7}  p99 {:>7}  min {:>7}  max {:>7}",
         fmt_ms(l.p50),
         fmt_ms(l.p90),
         fmt_ms(l.p99),
         fmt_ms(l.min),
         fmt_ms(l.max)
     );
+
+    if r.estimated_token_requests > 0 {
+        println!();
+        println!(
+            "note: token counts for {} of {} successful requests are estimates \
+             (no usage in response; use --include-usage for authoritative counts)",
+            r.estimated_token_requests, r.success_count
+        );
+    }
 
     if !r.errors.is_empty() {
         println!();

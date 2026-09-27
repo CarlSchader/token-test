@@ -23,8 +23,11 @@ pub struct BenchConfig {
     pub stream: bool,
     /// Request `stream_options.include_usage` for authoritative token counts.
     pub include_stream_usage: bool,
-    /// Per-request timeout.
+    /// Per-request timeout. Spans the entire request, including reading
+    /// the whole stream (i.e. the full thinking + generation time).
     pub timeout: Duration,
+    /// TCP/TLS connect timeout (the stream read is bounded by `timeout`).
+    pub connect_timeout: Duration,
 }
 
 impl BenchConfig {
@@ -76,6 +79,7 @@ mod tests {
             stream: true,
             include_stream_usage: false,
             timeout: Duration::from_secs(60),
+            connect_timeout: Duration::from_secs(10),
         }
     }
 

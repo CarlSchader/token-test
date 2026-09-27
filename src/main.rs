@@ -62,16 +62,30 @@ struct Cli {
     temperature: f32,
 
     /// Use streaming responses (SSE). Needed for real TTFT measurement.
-    #[arg(long, default_value_t = true)]
+    /// Use --no-stream for a single JSON response instead.
+    #[arg(long, default_value_t = true, num_args = 0..=1, default_missing_value = "true")]
     stream: bool,
 
+    /// Negate --stream: request a single JSON response instead of SSE.
+    #[arg(long, default_value_t = false, action = clap::ArgAction::SetTrue)]
+    no_stream: bool,
+
     /// Request the server to include usage stats in the final stream chunk.
+    /// Recommended when testing thinking models: without it, token counts
+    /// are estimated as one per SSE delta, which undercounts servers that
+    /// batch tokens per delta.
     #[arg(long)]
     include_usage: bool,
 
-    /// Per-request timeout in seconds.
-    #[arg(long, default_value_t = 120)]
+    /// Per-request timeout in seconds. Spans the entire request, including
+    /// reading the whole stream (i.e. the full thinking + generation time);
+    /// raise it for long generations.
+    #[arg(long, default_value_t = 300)]
     timeout: u64,
+
+    /// TCP/TLS connect timeout in seconds.
+    #[arg(long, default_value_t = 10)]
+    connect_timeout: u64,
 
     /// List available models and exit.
     #[arg(long, conflicts_with = "requests")]
@@ -101,9 +115,10 @@ async fn main() -> process::ExitCode {
         system: cli.system,
         max_tokens: cli.max_tokens,
         temperature: cli.temperature,
-        stream: cli.stream,
+        stream: cli.stream && !cli.no_stream,
         include_stream_usage: cli.include_usage,
         timeout: Duration::from_secs(cli.timeout),
+        connect_timeout: Duration::from_secs(cli.connect_timeout),
     };
 
     match config.validate() {

@@ -127,8 +127,15 @@ impl<S> SseStream<S> {
         self.leftover.extend_from_slice(bytes);
         let take = self.leftover.len() - utf8_tail_len(&self.leftover);
         if take > 0 {
-            self.buf
-                .push_str(std::str::from_utf8(&self.leftover[..take]).unwrap_or(""));
+            // SSE payloads are ASCII in practice; Utf8Chunks handles
+            // malformed input by dropping only the invalid bytes instead
+            // of the whole buffer.
+            for chunk in self.leftover[..take].utf8_chunks() {
+                if !chunk.valid().is_empty() {
+                    self.buf.push_str(chunk.valid());
+                }
+                // Invalid bytes are dropped.
+            }
         }
         if take < self.leftover.len() {
             self.leftover = self.leftover.split_off(take);
@@ -161,7 +168,20 @@ fn utf8_tail_len(b: &[u8]) -> usize {
         let have = b.len() - i;
         return if have >= needed { 0 } else { have };
     }
-    std::cmp::min(4, b.len())
+    // All four scanned bytes are continuation bytes: a valid UTF-8
+    // sequence is at most 4 bytes long, so the entire trailing run of
+    // continuation bytes is invalid. Report the whole run so it is held
+    // (and eventually dropped by the safety cap in `push_bytes`) rather
+    // than fragmented across pushes.
+    let mut run = 0;
+    for &byte in b.iter().rev() {
+        if (0b1000_0000..=0b1011_1111).contains(&byte) {
+            run += 1;
+        } else {
+            break;
+        }
+    }
+    run
 }
 
 #[cfg(test)]
@@ -234,5 +254,21 @@ mod tests {
     #[tokio::test]
     async fn empty_stream() {
         assert_eq!(parse("").await, Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn malformed_bytes_are_dropped_without_losing_the_payload() {
+        // A run of seven dangling continuation bytes (>4) after a valid
+        // payload; the next chunk completes the event.
+        let s = futures::stream::iter(vec![
+            Ok::<_, reqwest::Error>(Bytes::from_static(
+                b"data: ok\x80\x80\x80\x80\x80\x80\x80\n",
+            )),
+            Ok::<_, reqwest::Error>(Bytes::from_static(b"\n")),
+        ]);
+        let mut st = SseStream::new(s);
+        let event = st.next().await.expect("event expected");
+        assert_eq!(event.unwrap(), "ok");
+        assert!(st.next().await.is_none());
     }
 }
