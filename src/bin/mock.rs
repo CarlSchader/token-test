@@ -26,7 +26,7 @@ use serde_json::json;
 #[command(name = "token-test-mock", about = "Mock OpenAI-compatible LLM server for token-test")]
 struct Cli {
     /// Address to bind.
-    #[arg(short, long, default_value = "127.0.0.1")]
+    #[arg(long, default_value = "127.0.0.1")]
     host: String,
 
     /// Port to listen on.

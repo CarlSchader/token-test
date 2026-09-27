@@ -76,7 +76,7 @@ nix run . -- http://localhost:8000/v1 -m gpt-4o-mini -c 4 -n 20
 - **tokens/s (incl. reasoning)** — (visible + reasoning tokens) / wall-clock time
 - **tokens/s (steady, ...)** — the same ratios over the *measured window* (first measured request start to last measured request end), so warm-up requests don't drag on the denominator
 - **requests/s** — successful requests / wall-clock time
-- **per-request tok/s** — (visible + reasoning tokens) / (stream end − first token of any kind), reported as p50/p90/p99. Requests with a generation window ≤ 1 ms are dropped (latency resolution dominates sub-millisecond windows).
+- **per-request tok/s** — (visible + reasoning tokens) / (stream end − first token of any kind), reported as p50/p90/p99. For non-stream requests the full latency is the generation window instead. Requests with a generation window ≤ 1 ms are dropped (latency resolution dominates sub-millisecond windows).
 - **TTFT** — time from request start to the first *content* token
 - **first token** — time from request start to the first token of *any* kind (content or reasoning). For thinking models this marks the start of the thinking phase.
 - **total latency** — time from request start to stream end

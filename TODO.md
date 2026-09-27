@@ -37,7 +37,7 @@ All file paths are relative to the repo root.
 
 1. Start mock with reasoning: `cargo run --release --bin token-test-mock -- --tokens 40 --reasoning-tokens 800 --token-ms 1`.
 2. Bench at high concurrency: `cargo run --release -- http://127.0.0.1:8901/v1 -m mock-model -c 16 -n 20 --include-usage`.
-3. Assert aggregate `tokens/s (incl. reasoning)` ≈ 840 tok/s ± a few % (40+800 tokens every ~1 s per stream, wall time dominated by last request at c=16).
-4. Assert per-request `reasoning_tokens` = 800 and thinking-inclusive rate ≈ (40+800) / (stream end − first reasoning token).
+3. Assert aggregate `tokens/s (incl. reasoning)` ≈ (measured requests × 840) / wall time — with `-c 16 -n 20 --warmup 2` that is 18 × 840 ≈ 15120 tokens over ≈ 1.8 s of wall clock ≈ 8.4–8.6 k tok/s (≈ concurrency × the ~840 tok/s per-stream rate; the per-stream rate itself is ~1000 tok/s since the first token is free and 840 tokens stream in 840 ms).
+4. Assert per-request `reasoning_tokens` = 800 and thinking-inclusive per-request rate ≈ 840 / (stream end − first reasoning token) ≈ 1000 tok/s. Non-stream requests use the full latency as their generation window (their "first token" *is* the response).
 5. Repeat with `--no-stream` and without `--include-usage` to exercise the fallback paths.
 6. `cargo test` — existing SSE/stats/config tests should pass unchanged.

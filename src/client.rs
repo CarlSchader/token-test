@@ -22,6 +22,9 @@ pub struct CompletionResult {
     /// thinking models this marks the start of the thinking phase.
     pub first_token: Option<Duration>,
     pub latency: Duration,
+    /// True when the response was an SSE stream (false: single JSON body).
+    /// Affects how the per-request generation window is computed.
+    pub streamed: bool,
     /// True when completion token count was estimated (no authoritative
     /// usage in response).
     pub estimated_tokens: bool,
@@ -41,6 +44,7 @@ fn parse_usage(usage: &serde_json::Value) -> (u64, u64, u64, u64, bool) {
     let mut completion = 0u64;
     let mut reasoning = 0u64;
     let mut has_completion = false;
+    let mut object_form = false;
 
     if let Some(ct) = usage.get("completion_tokens") {
         match ct {
@@ -54,13 +58,16 @@ fn parse_usage(usage: &serde_json::Value) -> (u64, u64, u64, u64, bool) {
                 completion = map.get("tokens").and_then(|v| v.as_u64()).unwrap_or(0);
                 reasoning = map.get("reasoning_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
                 has_completion = true;
+                object_form = true;
             }
             _ => {}
         }
     }
 
-    // Flat-format servers report reasoning tokens at the top level.
-    if reasoning == 0 {
+    // Flat-format servers report reasoning tokens at the top level. Only
+    // used when the object form didn't already provide a value (even an
+    // explicit 0 counts as "provided").
+    if !object_form && reasoning == 0 {
         reasoning = usage.get("reasoning_tokens").and_then(|v| v.as_u64()).unwrap_or(0);
     }
 
@@ -208,6 +215,7 @@ async fn stream_completion(
         ttft: ttft.map(|t| t - start),
         first_token: first_token.map(|t| t - start),
         latency,
+        streamed: true,
         estimated_tokens: !has_authoritative_completion,
     })
 }
@@ -229,11 +237,11 @@ async fn nonstream_completion(
             None => (0, 0, 0, 0, false),
         };
 
+    let mut estimated_tokens = !has_completion;
     if !has_completion && total_tokens >= prompt_tokens {
         completion_tokens = total_tokens - prompt_tokens;
+        estimated_tokens = false;
     }
-
-    let estimated_tokens = !(has_completion || total_tokens > 0);
 
     Ok(CompletionResult {
         prompt_tokens,
@@ -243,6 +251,7 @@ async fn nonstream_completion(
         ttft: Some(latency),
         first_token: Some(latency),
         latency,
+        streamed: false,
         estimated_tokens,
     })
 }

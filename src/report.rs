@@ -6,8 +6,10 @@ use crate::bench::BenchReport;
 
 /// A summary of a finished benchmark, serialized to JSON when requested.
 ///
-/// All counts and rates are based on measured (non-warmup) results; the
-/// `warmup` field records how many requests were excluded.
+/// All token/request *counts* are based on measured (non-warmup) results.
+/// Wall-clock rates (`*_per_second` without the `steady_` prefix) span the
+/// full run including warm-up; the `steady_*` rates instead use the measured
+/// window (`steady_window_seconds`), so warm-up doesn't drag them down.
 #[derive(Serialize)]
 pub struct Report {
     pub model: String,
@@ -101,7 +103,7 @@ pub fn build_report(report: &BenchReport) -> Report {
     let steady_secs = report
         .measured_window()
         .map(|w| w.as_secs_f64())
-        .unwrap_or(wall_secs);
+        .unwrap_or(0.0);
     Report {
         model: report.config.model.clone(),
         url: report.config.completions_url(),

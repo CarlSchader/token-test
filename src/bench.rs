@@ -19,6 +19,8 @@ pub struct RequestResult {
     /// Time to the first token of any kind (content or reasoning).
     pub first_token: Option<Duration>,
     pub latency: Duration,
+    /// True when the response was an SSE stream.
+    pub streamed: bool,
     pub prompt_tokens: u64,
     /// Visible completion tokens (excludes reasoning).
     pub completion_tokens: u64,
@@ -134,23 +136,22 @@ impl BenchReport {
         self.success_count() as f64 / secs
     }
 
-    /// Per-request generation rate, including the thinking phase:
-    /// (visible + reasoning tokens) / (stream end − first token of any
-    /// kind). Requests with a generation window ≤ 1 ms are dropped: over
-    /// sub-millisecond windows the latency-resolution noise dominates the
-    /// ratio, so the value is meaningless.
+    /// Per-request generation rate, including the thinking phase, in
+    /// tok/s. For streamed responses the window is (stream end − first
+    /// token of any kind); for non-stream responses the whole response is
+    /// the generation, so the full latency is used. Requests whose window
+    /// is ≤ 1 ms are dropped: over sub-millisecond windows the latency
+    /// resolution noise dominates the ratio, so the value is meaningless.
     pub fn per_request_rates(&self) -> Vec<f64> {
         self.measured()
-            .filter(|r| r.ok && r.completion_tokens + r.reasoning_tokens > 0)
+            .filter(|r| r.ok)
             .filter_map(|r| {
-                let first = r.first_token.or(r.ttft).unwrap_or(Duration::ZERO);
-                let gen_time = r.latency.saturating_sub(first);
-                let secs = gen_time.as_secs_f64();
-                if secs > 0.001 {
-                    Some((r.completion_tokens + r.reasoning_tokens) as f64 / secs)
-                } else {
-                    None
-                }
+                per_request_rate(
+                    r.streamed,
+                    r.first_token,
+                    r.latency,
+                    r.completion_tokens + r.reasoning_tokens,
+                )
             })
             .collect()
     }
@@ -176,6 +177,33 @@ impl BenchReport {
             .filter(|r| r.ok)
             .map(|r| r.latency.as_millis() as f64)
             .collect()
+    }
+}
+
+/// Per-request generation rate including reasoning, or `None` when the
+/// request produced no tokens or its generation window is too small
+/// (< 1 ms) to be meaningful (latency resolution dominates the ratio).
+fn per_request_rate(
+    streamed: bool,
+    first: Option<Duration>,
+    latency: Duration,
+    tokens: u64,
+) -> Option<f64> {
+    if tokens == 0 {
+        return None;
+    }
+    // Streamed: window runs from the first token of any kind to stream end.
+    // Non-streamed: the whole response *is* the generation (the "first
+    // token" arrives at the end), so use the full latency.
+    let window = if streamed {
+        latency.saturating_sub(first.unwrap_or(Duration::ZERO))
+    } else {
+        latency
+    };
+    if window > Duration::from_millis(1) {
+        Some(tokens as f64 / window.as_secs_f64())
+    } else {
+        None
     }
 }
 
@@ -214,13 +242,8 @@ pub async fn run_bench(config: &BenchConfig, progress: bool) -> Result<BenchRepo
                 match &result {
                     Ok(c) => {
                         let tokens = c.completion_tokens + c.reasoning_tokens;
-                        let first = c.first_token.or(c.ttft).unwrap_or(Duration::ZERO);
-                        let gen = c.latency.saturating_sub(first);
-                        let rate = if gen.as_secs_f64() > 0.001 {
-                            tokens as f64 / gen.as_secs_f64()
-                        } else {
-                            0.0
-                        };
+                        let rate = per_request_rate(c.streamed, c.first_token, c.latency, tokens)
+                            .unwrap_or(0.0);
                         eprintln!(
                             "  [{}] ok  {}+{} tok  {:.1} tok/s  1st {}  lat {}ms",
                             i,
@@ -248,6 +271,7 @@ pub async fn run_bench(config: &BenchConfig, progress: bool) -> Result<BenchRepo
                     ttft: c.ttft,
                     first_token: c.first_token,
                     latency: c.latency,
+                    streamed: c.streamed,
                     prompt_tokens: c.prompt_tokens,
                     completion_tokens: c.completion_tokens,
                     reasoning_tokens: c.reasoning_tokens,
@@ -263,6 +287,7 @@ pub async fn run_bench(config: &BenchConfig, progress: bool) -> Result<BenchRepo
                     ttft: None,
                     first_token: None,
                     latency: Duration::ZERO,
+                    streamed: false,
                     prompt_tokens: 0,
                     completion_tokens: 0,
                     reasoning_tokens: 0,
